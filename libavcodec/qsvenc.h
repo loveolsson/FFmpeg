@@ -40,6 +40,8 @@ typedef struct QSVEncContext {
     QSVFrame *work_frames;
 
     mfxSession session;
+    mfxSession session_vpp;
+
     QSVSession internal_qs;
 
     int packet_size;
@@ -47,7 +49,9 @@ typedef struct QSVEncContext {
     int height_align;
 
     mfxVideoParam param;
+    mfxVideoParam param_vpp;
     mfxFrameAllocRequest req;
+    mfxFrameAllocRequest req_vpp;
 
     mfxExtCodingOption  extco;
     mfxExtBuffer *extparam[1];

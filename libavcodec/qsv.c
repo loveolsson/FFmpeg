@@ -174,6 +174,7 @@ int ff_qsv_init_internal_session(AVCodecContext *avctx, QSVSession *qs,
     mfxIMPL impl   = MFX_IMPL_AUTO_ANY;
     mfxVersion ver = { { QSV_VERSION_MINOR, QSV_VERSION_MAJOR } };
 
+
     const char *desc;
     int ret;
 
@@ -182,6 +183,9 @@ int ff_qsv_init_internal_session(AVCodecContext *avctx, QSVSession *qs,
         av_log(avctx, AV_LOG_ERROR, "Error initializing an internal MFX session\n");
         return ff_qsv_error(ret);
     }
+
+    MFXQueryVersion ((mfxSession) qs->session, &ver);
+
 
     ret = ff_qsv_set_display_handle(avctx, qs);
     if (ret < 0)

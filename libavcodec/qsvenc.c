@@ -37,6 +37,9 @@
 #include "qsv_internal.h"
 #include "qsvenc.h"
 
+#define MSDK_ALIGN16(value)             (((value + 15) >> 4) << 4)
+
+
 static int init_video_param(AVCodecContext *avctx, QSVEncContext *q)
 {
     const char *ratecontrol_desc;
@@ -155,6 +158,50 @@ static int init_video_param(AVCodecContext *avctx, QSVEncContext *q)
     return 0;
 }
 
+static int init_video_param_vpp(AVCodecContext *avctx, QSVEncContext *q)
+{
+
+    int ret;
+
+    //memset(&q->param, 0, sizeof(mfxVideoParam));
+
+    q->param_vpp.vpp.In.FourCC = MFX_FOURCC_YUY2;
+    q->param_vpp.vpp.In.ChromaFormat = MFX_CHROMAFORMAT_YUV422 ;
+    q->param_vpp.vpp.In.CropX = 0;
+    q->param_vpp.vpp.In.CropY = 0;
+    q->param_vpp.vpp.In.CropW = avctx->width;
+    q->param_vpp.vpp.In.CropH = avctx->height;
+    q->param_vpp.vpp.In.PicStruct = MFX_PICSTRUCT_PROGRESSIVE;
+    q->param_vpp.vpp.In.FrameRateExtN = 30;
+    q->param_vpp.vpp.In.FrameRateExtD = 1;
+    // width must be a multiple of 16
+    // height must be a multiple of 16 in case of frame picture and a multiple of 32 in case of field picture
+    q->param_vpp.vpp.In.Width = MSDK_ALIGN16(avctx->width);
+    q->param_vpp.vpp.In.Height = MSDK_ALIGN16(avctx->height);
+    // Output data
+    q->param_vpp.vpp.Out.FourCC = MFX_FOURCC_NV12;
+    q->param_vpp.vpp.Out.ChromaFormat = MFX_CHROMAFORMAT_YUV420;
+    q->param_vpp.vpp.Out.CropX = 0;
+    q->param_vpp.vpp.Out.CropY = 0;
+    q->param_vpp.vpp.Out.CropW = avctx->width;
+    q->param_vpp.vpp.Out.CropH = avctx->height;
+    q->param_vpp.vpp.Out.PicStruct = MFX_PICSTRUCT_PROGRESSIVE;
+    q->param_vpp.vpp.Out.FrameRateExtN = 30;
+    q->param_vpp.vpp.Out.FrameRateExtD = 1;
+    // width must be a multiple of 16
+    // height must be a multiple of 16 in case of frame picture and a multiple of 32 in case of field picture
+    q->param_vpp.vpp.Out.Width = MSDK_ALIGN16(avctx->width);
+    q->param_vpp.vpp.Out.Height = MSDK_ALIGN16(avctx->height);
+
+    q->param_vpp.IOPattern =
+        MFX_IOPATTERN_IN_SYSTEM_MEMORY | MFX_IOPATTERN_OUT_SYSTEM_MEMORY;
+
+        printf("%i %i\n", q->param_vpp.vpp.Out.Height, avctx->height);
+
+
+    return 0;
+}
+
 static int qsv_retrieve_enc_params(AVCodecContext *avctx, QSVEncContext *q)
 {
     uint8_t sps_buf[128];
@@ -206,8 +253,9 @@ int ff_qsv_enc_init(AVCodecContext *avctx, QSVEncContext *q)
 {
     int ret;
 
-    q->param.IOPattern  = MFX_IOPATTERN_IN_SYSTEM_MEMORY;
+    q->param.IOPattern  = MFX_IOPATTERN_IN_SYSTEM_MEMORY ;
     q->param.AsyncDepth = q->async_depth;
+    q->param_vpp.AsyncDepth = q->async_depth;
 
     q->async_fifo = av_fifo_alloc((1 + q->async_depth) *
                                   (sizeof(AVPacket) + sizeof(mfxSyncPoint) + sizeof(mfxBitstream*)));
@@ -234,25 +282,57 @@ int ff_qsv_enc_init(AVCodecContext *avctx, QSVEncContext *q)
     if (ret < 0)
         return ret;
 
-    ret = MFXVideoENCODE_QueryIOSurf(q->session, &q->param, &q->req);
-    if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "Error querying the encoding parameters\n");
-        return ff_qsv_error(ret);
+
+      ret = MFXVideoENCODE_QueryIOSurf(q->session, &q->param, &q->req);
+      if (ret < 0) {
+          av_log(avctx, AV_LOG_ERROR, "Error querying the encoding parameters\n");
+          return ff_qsv_error(ret);
+      }
+
+
+      ret = MFXVideoENCODE_Init(q->session, &q->param);
+      if (MFX_WRN_PARTIAL_ACCELERATION==ret) {
+          av_log(avctx, AV_LOG_WARNING, "Encoder will work with partial HW acceleration\n");
+      } else if (ret < 0) {
+          av_log(avctx, AV_LOG_ERROR, "Error initializing the encoder\n");
+          return ff_qsv_error(ret);
+      }
+
+      ret = qsv_retrieve_enc_params(avctx, q);
+      if (ret < 0) {
+          av_log(avctx, AV_LOG_ERROR, "Error retrieving encoding parameters.\n");
+          return ret;
+      }
+
+
+
+
+    if (avctx->pix_fmt == AV_PIX_FMT_YUYV422) {
+      //Initiate VPP session
+      init_video_param_vpp(avctx, q);
+      printf("%s\n", "Vi får YUYV422");
+
+      ret = MFXVideoVPP_QueryIOSurf(q->session, &q->param_vpp, &q->req_vpp);
+      if (ret < 0) {
+          av_log(avctx, AV_LOG_ERROR, "Error querying the vpp parameters %i\n", ret);
+          return ff_qsv_error(ret);
+      }
+
+
+
+      ret = MFXVideoVPP_Init(q->session, &q->param_vpp);
+
+      if (MFX_WRN_PARTIAL_ACCELERATION==ret) {
+          av_log(avctx, AV_LOG_WARNING, "VPP will work with partial HW acceleration\n");
+      } else if (ret < 0) {
+          av_log(avctx, AV_LOG_ERROR, "Error initializing vpp\n");
+          return ff_qsv_error(ret);
+      }
+
     }
 
-    ret = MFXVideoENCODE_Init(q->session, &q->param);
-    if (MFX_WRN_PARTIAL_ACCELERATION==ret) {
-        av_log(avctx, AV_LOG_WARNING, "Encoder will work with partial HW acceleration\n");
-    } else if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "Error initializing the encoder\n");
-        return ff_qsv_error(ret);
-    }
 
-    ret = qsv_retrieve_enc_params(avctx, q);
-    if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "Error retrieving encoding parameters.\n");
-        return ret;
-    }
+
 
     q->avctx = avctx;
 

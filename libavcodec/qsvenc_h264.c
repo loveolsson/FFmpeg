@@ -119,6 +119,7 @@ AVCodec ff_h264_qsv_encoder = {
     .capabilities   = CODEC_CAP_DELAY,
     .pix_fmts       = (const enum AVPixelFormat[]){ AV_PIX_FMT_NV12,
                                                     AV_PIX_FMT_QSV,
+                                                    //AV_PIX_FMT_YUYV422,
                                                     AV_PIX_FMT_NONE },
     .priv_class     = &class,
     .defaults       = qsv_enc_defaults,
